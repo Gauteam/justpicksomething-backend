@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -75,5 +76,22 @@ func TestSecureLocalSkipsHTTPS(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+// Every method the router uses must be allowed by CORS, or browsers block it
+// at the preflight even though non-browser clients work.
+func TestSecureAllowsRouterMethods(t *testing.T) {
+	h := secure(Config{AllowedOrigins: []string{frontend}}, http.NotFoundHandler())
+	req := httptest.NewRequest(http.MethodOptions, "/rooms/abc", nil)
+	req.Header.Set("Origin", frontend)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	allowed := rec.Header().Get("Access-Control-Allow-Methods")
+	for _, m := range []string{"GET", "POST", "PUT", "PATCH", "DELETE"} {
+		if !strings.Contains(allowed, m) {
+			t.Errorf("Access-Control-Allow-Methods %q is missing %s", allowed, m)
+		}
 	}
 }

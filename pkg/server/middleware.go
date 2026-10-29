@@ -65,7 +65,7 @@ func secure(cfg Config, next http.Handler) http.Handler {
 
 		if origin != "" {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 			// Cache preflights to save function invocations.
 			w.Header().Set("Access-Control-Max-Age", "600")
