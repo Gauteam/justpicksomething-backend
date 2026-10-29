@@ -35,6 +35,18 @@ On Vercel (`VERCEL` is set) the API also rejects non-HTTPS requests and sends HS
 
 ## Endpoints
 
-| Method | Path | Notes |
-| --- | --- | --- |
-| `GET` | `/health` | `{"status":"ok","db":"ok"}`, or `503` if the database is unreachable |
+Authenticated endpoints take `Authorization: Bearer <token>`, where the token
+comes from creating or joining the room. A bad or missing token is `401`.
+
+| Method | Path | Auth | Body → Response |
+| --- | --- | --- | --- |
+| `GET` | `/health` | — | → `{"status":"ok","db":"ok"}`, or `503` if the database is unreachable |
+| `POST` | `/rooms` | — | `{name, displayName}` → `201 {slug, passcode, token}`; creator is admin |
+| `POST` | `/rooms/{slug}/join` | — | `{passcode, displayName}` → `201 {token}`; `401` wrong passcode, `404` no room, `409` name taken |
+| `GET` | `/rooms/{slug}` | ✓ | → `{room, me, members, items}`; items sorted by score with `up`, `down`, `score`, `myVote`. `?since=<room.updatedAt>` → `304` if nothing changed |
+| `POST` | `/rooms/{slug}/items` | ✓ | `{title}` → `201` item |
+| `PUT` | `/rooms/{slug}/items/{id}/vote` | ✓ | `{value: 1 \| -1}` → `204` |
+| `DELETE` | `/rooms/{slug}/items/{id}/vote` | ✓ | → `204` |
+
+Limits: room name 100 characters, display name 40, item title 200; passcodes
+are 6 characters, case-insensitive.
