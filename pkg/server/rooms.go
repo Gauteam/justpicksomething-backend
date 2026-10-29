@@ -13,7 +13,6 @@ import (
 
 	"github.com/Gauteam/justpicksomething-backend/pkg/auth"
 	"github.com/Gauteam/justpicksomething-backend/pkg/db"
-	"github.com/google/uuid"
 )
 
 const (
@@ -31,6 +30,7 @@ func registerRoomRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /rooms/{slug}/items", withSession(handleAddItem))
 	mux.HandleFunc("PUT /rooms/{slug}/items/{id}/vote", withSession(handleSetVote))
 	mux.HandleFunc("DELETE /rooms/{slug}/items/{id}/vote", withSession(handleClearVote))
+	registerM2Routes(mux)
 }
 
 func handleCreateRoom(w http.ResponseWriter, r *http.Request) {
@@ -136,6 +136,11 @@ func handleGetRoom(w http.ResponseWriter, r *http.Request, s db.Session) {
 		internalError(w, "get room: members", err)
 		return
 	}
+	columns, err := db.Columns(r.Context(), s.Room.ID)
+	if err != nil {
+		internalError(w, "get room: columns", err)
+		return
+	}
 	items, err := db.Items(r.Context(), s.Room.ID, s.Member.ID)
 	if err != nil {
 		internalError(w, "get room: items", err)
@@ -146,6 +151,7 @@ func handleGetRoom(w http.ResponseWriter, r *http.Request, s db.Session) {
 		"room":    s.Room,
 		"me":      s.Member,
 		"members": members,
+		"columns": columns,
 		"items":   items,
 	})
 }
@@ -202,7 +208,7 @@ func cleanTitles(raw []string) ([]string, error) {
 }
 
 func handleSetVote(w http.ResponseWriter, r *http.Request, s db.Session) {
-	itemID, ok := itemIDFromPath(w, r)
+	itemID, ok := idFromPath(w, r, "item")
 	if !ok {
 		return
 	}
@@ -230,7 +236,7 @@ func handleSetVote(w http.ResponseWriter, r *http.Request, s db.Session) {
 }
 
 func handleClearVote(w http.ResponseWriter, r *http.Request, s db.Session) {
-	itemID, ok := itemIDFromPath(w, r)
+	itemID, ok := idFromPath(w, r, "item")
 	if !ok {
 		return
 	}
@@ -262,15 +268,6 @@ func withSession(next func(http.ResponseWriter, *http.Request, db.Session)) http
 		}
 		next(w, r, s)
 	}
-}
-
-func itemIDFromPath(w http.ResponseWriter, r *http.Request) (string, bool) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "item not found")
-		return "", false
-	}
-	return id.String(), true
 }
 
 func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {

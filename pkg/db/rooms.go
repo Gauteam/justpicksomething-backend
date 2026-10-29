@@ -34,10 +34,14 @@ type Item struct {
 	Title     string    `json:"title"`
 	CreatedBy *string   `json:"createdBy"`
 	CreatedAt time.Time `json:"createdAt"`
-	Up        int       `json:"up"`
-	Down      int       `json:"down"`
-	Score     int       `json:"score"`
-	MyVote    int       `json:"myVote"`
+	// Column values keyed by column ID.
+	Fields       map[string]any `json:"fields"`
+	Position     int            `json:"position"`
+	CommentCount int            `json:"commentCount"`
+	Up           int            `json:"up"`
+	Down         int            `json:"down"`
+	Score        int            `json:"score"`
+	MyVote       int            `json:"myVote"`
 }
 
 // Session is an authenticated member and the room they belong to.
@@ -151,8 +155,8 @@ func Members(ctx context.Context, roomID string) ([]Member, error) {
 	})
 }
 
-// Items lists a room's items with vote tallies and memberID's own vote,
-// highest score first, then oldest first.
+// Items lists a room's items with vote tallies, comment counts and memberID's
+// own vote, highest score first, then oldest first.
 func Items(ctx context.Context, roomID, memberID string) ([]Item, error) {
 	p, err := Pool()
 	if err != nil {
@@ -165,6 +169,9 @@ func Items(ctx context.Context, roomID, memberID string) ([]Item, error) {
 			i.title,
 			i.created_by,
 			i.created_at,
+			i.fields,
+			i.position,
+			(SELECT count(*) FROM comments c WHERE c.item_id = i.id),
 			COALESCE(SUM(v.value) FILTER (WHERE v.value > 0), 0),
 			COALESCE(-SUM(v.value) FILTER (WHERE v.value < 0), 0),
 			COALESCE(MAX(v.value) FILTER (WHERE v.member_id = $2), 0)
@@ -178,7 +185,10 @@ func Items(ctx context.Context, roomID, memberID string) ([]Item, error) {
 	}
 	items, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Item, error) {
 		var it Item
-		err := row.Scan(&it.ID, &it.Title, &it.CreatedBy, &it.CreatedAt, &it.Up, &it.Down, &it.MyVote)
+		err := row.Scan(
+			&it.ID, &it.Title, &it.CreatedBy, &it.CreatedAt, &it.Fields, &it.Position, &it.CommentCount,
+			&it.Up, &it.Down, &it.MyVote,
+		)
 		it.Score = it.Up - it.Down
 		return it, err
 	})
@@ -195,8 +205,8 @@ func Items(ctx context.Context, roomID, memberID string) ([]Item, error) {
 	return items, nil
 }
 
-// AddItems adds items to a room in the given order, skipping titles already
-// in the room (ignoring case). It returns the items actually added.
+// AddItems appends items to a room in the given order, skipping titles
+// already in the room (ignoring case). It returns the items actually added.
 func AddItems(ctx context.Context, roomID, memberID string, titles []string) ([]Item, error) {
 	p, err := Pool()
 	if err != nil {
@@ -208,20 +218,23 @@ func AddItems(ctx context.Context, roomID, memberID string, titles []string) ([]
 		// Offset created_at by position so the batch keeps its order when
 		// items tie on score.
 		rows, err := tx.Query(ctx, `
-			INSERT INTO items (room_id, title, created_by, created_at)
-			SELECT $1, t.title, $2, now() + t.ord * interval '1 microsecond'
+			INSERT INTO items (room_id, title, created_by, created_at, position)
+			SELECT
+				$1, t.title, $2,
+				now() + t.ord * interval '1 microsecond',
+				(SELECT COALESCE(max(position), 0) FROM items WHERE room_id = $1) + t.ord
 			FROM unnest($3::text[]) WITH ORDINALITY AS t(title, ord)
 			WHERE NOT EXISTS (
 				SELECT 1 FROM items i WHERE i.room_id = $1 AND lower(i.title) = lower(t.title)
 			)
-			RETURNING id, title, created_by, created_at
+			RETURNING id, title, created_by, created_at, fields, position
 		`, roomID, memberID, titles)
 		if err != nil {
 			return err
 		}
 		items, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (Item, error) {
 			var it Item
-			err := row.Scan(&it.ID, &it.Title, &it.CreatedBy, &it.CreatedAt)
+			err := row.Scan(&it.ID, &it.Title, &it.CreatedBy, &it.CreatedAt, &it.Fields, &it.Position)
 			return it, err
 		})
 		if err != nil || len(items) == 0 {
