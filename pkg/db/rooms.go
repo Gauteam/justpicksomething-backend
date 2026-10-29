@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
 	"time"
@@ -21,6 +22,18 @@ type Room struct {
 	Slug      string    `json:"slug"`
 	Name      string    `json:"name"`
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Settings. MaxItems nil means no limit.
+	MaxItems            *int       `json:"maxItems"`
+	VoteMode            string     `json:"voteMode"`
+	VotesPerMember      int        `json:"votesPerMember"`
+	AllowDuplicateVotes bool       `json:"allowDuplicateVotes"`
+	LockedAt            *time.Time `json:"lockedAt"`
+}
+
+// NewItem is an item to add, with optional column values.
+type NewItem struct {
+	Title  string
+	Fields map[string]any
 }
 
 type Member struct {
@@ -118,12 +131,16 @@ func SessionByToken(ctx context.Context, slug string, tokenHash []byte) (Session
 
 	var s Session
 	err = p.QueryRow(ctx, `
-		SELECT r.id, r.slug, r.name, r.updated_at, m.id, m.display_name, m.is_admin
+		SELECT
+			r.id, r.slug, r.name, r.updated_at,
+			r.max_items, r.vote_mode, r.votes_per_member, r.allow_duplicate_votes, r.locked_at,
+			m.id, m.display_name, m.is_admin
 		FROM members m
 		JOIN rooms r ON r.id = m.room_id
 		WHERE m.token_hash = $1 AND r.slug = $2
 	`, tokenHash, slug).Scan(
 		&s.Room.ID, &s.Room.Slug, &s.Room.Name, &s.Room.UpdatedAt,
+		&s.Room.MaxItems, &s.Room.VoteMode, &s.Room.VotesPerMember, &s.Room.AllowDuplicateVotes, &s.Room.LockedAt,
 		&s.Member.ID, &s.Member.DisplayName, &s.Member.IsAdmin,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -206,29 +223,45 @@ func Items(ctx context.Context, roomID, memberID string) ([]Item, error) {
 }
 
 // AddItems appends items to a room in the given order, skipping titles
-// already in the room (ignoring case). It returns the items actually added.
-func AddItems(ctx context.Context, roomID, memberID string, titles []string) ([]Item, error) {
-	p, err := Pool()
-	if err != nil {
-		return nil, err
+// already in the room (ignoring case). It returns the items actually added,
+// or ErrLimit (adding nothing) if they would take the room past maxItems.
+func AddItems(ctx context.Context, roomID, memberID string, newItems []NewItem, maxItems *int) ([]Item, error) {
+	titles := make([]string, len(newItems))
+	fields := make([]string, len(newItems))
+	for i, it := range newItems {
+		titles[i] = it.Title
+		f := it.Fields
+		if f == nil {
+			f = map[string]any{}
+		}
+		b, err := json.Marshal(f)
+		if err != nil {
+			return nil, err
+		}
+		fields[i] = string(b)
 	}
 
 	var items []Item
-	err = pgx.BeginFunc(ctx, p, func(tx pgx.Tx) error {
+	err := execInRoom(ctx, roomID, func(tx pgx.Tx) error {
+		// Lock the room row so concurrent adds can't both slip under the limit.
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM rooms WHERE id = $1 FOR UPDATE`, roomID); err != nil {
+			return err
+		}
+
 		// Offset created_at by position so the batch keeps its order when
 		// items tie on score.
 		rows, err := tx.Query(ctx, `
-			INSERT INTO items (room_id, title, created_by, created_at, position)
+			INSERT INTO items (room_id, title, fields, created_by, created_at, position)
 			SELECT
-				$1, t.title, $2,
+				$1, t.title, jsonb_strip_nulls(t.fields::jsonb), $2,
 				now() + t.ord * interval '1 microsecond',
 				(SELECT COALESCE(max(position), 0) FROM items WHERE room_id = $1) + t.ord
-			FROM unnest($3::text[]) WITH ORDINALITY AS t(title, ord)
+			FROM unnest($3::text[], $4::text[]) WITH ORDINALITY AS t(title, fields, ord)
 			WHERE NOT EXISTS (
 				SELECT 1 FROM items i WHERE i.room_id = $1 AND lower(i.title) = lower(t.title)
 			)
 			RETURNING id, title, created_by, created_at, fields, position
-		`, roomID, memberID, titles)
+		`, roomID, memberID, titles, fields)
 		if err != nil {
 			return err
 		}
@@ -237,10 +270,20 @@ func AddItems(ctx context.Context, roomID, memberID string, titles []string) ([]
 			err := row.Scan(&it.ID, &it.Title, &it.CreatedBy, &it.CreatedAt, &it.Fields, &it.Position)
 			return it, err
 		})
-		if err != nil || len(items) == 0 {
+		if err != nil {
 			return err
 		}
-		return touchRoom(ctx, tx, roomID)
+
+		if maxItems != nil {
+			var count int
+			if err := tx.QueryRow(ctx, `SELECT count(*) FROM items WHERE room_id = $1`, roomID).Scan(&count); err != nil {
+				return err
+			}
+			if count > *maxItems {
+				return ErrLimit
+			}
+		}
+		return nil
 	})
 	if items == nil {
 		items = []Item{}
@@ -248,15 +291,31 @@ func AddItems(ctx context.Context, roomID, memberID string, titles []string) ([]
 	return items, err
 }
 
-// SetVote sets memberID's vote on an item. It returns ErrNotFound if the item
-// isn't in the room.
-func SetVote(ctx context.Context, roomID, itemID, memberID string, value int) error {
-	p, err := Pool()
-	if err != nil {
-		return err
-	}
+// SetVote sets memberID's vote on an item: ±1 in thumbs mode, or the number
+// of votes placed in budget mode. With a non-nil budget, it returns ErrLimit if
+// the member's votes across the room would exceed it. It returns ErrNotFound
+// if the item isn't in the room.
+func SetVote(ctx context.Context, roomID, itemID, memberID string, value int, budget *int) error {
+	return execInRoom(ctx, roomID, func(tx pgx.Tx) error {
+		if budget != nil {
+			// Lock the member row so parallel votes can't overspend.
+			var used int
+			err := tx.QueryRow(ctx, `
+				SELECT COALESCE((
+					SELECT sum(value) FROM votes
+					WHERE room_id = $1 AND member_id = $2 AND item_id <> $3
+				), 0)
+				FROM members WHERE id = $2
+				FOR UPDATE
+			`, roomID, memberID, itemID).Scan(&used)
+			if err != nil {
+				return err
+			}
+			if used+value > *budget {
+				return ErrLimit
+			}
+		}
 
-	return pgx.BeginFunc(ctx, p, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			INSERT INTO votes (room_id, item_id, member_id, value)
 			SELECT $1, $2, $3, $4
@@ -270,7 +329,7 @@ func SetVote(ctx context.Context, roomID, itemID, memberID string, value int) er
 		if tag.RowsAffected() == 0 {
 			return ErrNotFound
 		}
-		return touchRoom(ctx, tx, roomID)
+		return nil
 	})
 }
 

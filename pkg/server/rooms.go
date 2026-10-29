@@ -27,9 +27,9 @@ func registerRoomRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /rooms", handleCreateRoom)
 	mux.HandleFunc("POST /rooms/{slug}/join", handleJoinRoom)
 	mux.HandleFunc("GET /rooms/{slug}", withSession(handleGetRoom))
-	mux.HandleFunc("POST /rooms/{slug}/items", withSession(handleAddItem))
-	mux.HandleFunc("PUT /rooms/{slug}/items/{id}/vote", withSession(handleSetVote))
-	mux.HandleFunc("DELETE /rooms/{slug}/items/{id}/vote", withSession(handleClearVote))
+	mux.HandleFunc("POST /rooms/{slug}/items", withSession(requireUnlocked(handleAddItem)))
+	mux.HandleFunc("PUT /rooms/{slug}/items/{id}/vote", withSession(requireUnlocked(handleSetVote)))
+	mux.HandleFunc("DELETE /rooms/{slug}/items/{id}/vote", withSession(requireUnlocked(handleClearVote)))
 	registerM2Routes(mux)
 }
 
@@ -156,23 +156,45 @@ func handleGetRoom(w http.ResponseWriter, r *http.Request, s db.Session) {
 	})
 }
 
-// handleAddItem adds one item ({title}) or several at once ({titles}).
-// Blank entries and titles already in the room (ignoring case) are skipped.
+// handleAddItem adds one item ({title}), several titles ({titles}), or
+// several items with column values ({items: [{title, fields}]}). Blank titles
+// and titles already in the room (ignoring case) are skipped.
 func handleAddItem(w http.ResponseWriter, r *http.Request, s db.Session) {
 	var body struct {
-		Title  string   `json:"title"`
-		Titles []string `json:"titles"`
+		Title  string    `json:"title"`
+		Titles []string  `json:"titles"`
+		Items  []rawItem `json:"items"`
 	}
 	if !decodeBody(w, r, &body) {
 		return
 	}
-	titles, err := cleanTitles(append(body.Titles, body.Title))
+	raw := body.Items
+	for _, t := range append(body.Titles, body.Title) {
+		raw = append(raw, rawItem{Title: t})
+	}
+
+	var columns []db.Column
+	for _, it := range raw {
+		if len(it.Fields) > 0 {
+			var err error
+			if columns, err = db.Columns(r.Context(), s.Room.ID); err != nil {
+				internalError(w, "add items: columns", err)
+				return
+			}
+			break
+		}
+	}
+	newItems, err := cleanNewItems(raw, columns)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	items, err := db.AddItems(r.Context(), s.Room.ID, s.Member.ID, titles)
+	items, err := db.AddItems(r.Context(), s.Room.ID, s.Member.ID, newItems, s.Room.MaxItems)
+	if errors.Is(err, db.ErrLimit) {
+		writeError(w, http.StatusConflict, fmt.Sprintf("this room is limited to %d options", *s.Room.MaxItems))
+		return
+	}
 	if err != nil {
 		internalError(w, "add items", err)
 		return
@@ -180,31 +202,43 @@ func handleAddItem(w http.ResponseWriter, r *http.Request, s db.Session) {
 	writeJSON(w, http.StatusCreated, map[string]any{"items": items})
 }
 
-// cleanTitles trims and validates titles, dropping blanks and case-insensitive
-// duplicates while keeping the original order.
-func cleanTitles(raw []string) ([]string, error) {
+type rawItem struct {
+	Title  string                     `json:"title"`
+	Fields map[string]json.RawMessage `json:"fields"`
+}
+
+// cleanNewItems trims and validates items, dropping blank titles and
+// case-insensitive duplicates while keeping the original order.
+func cleanNewItems(raw []rawItem, columns []db.Column) ([]db.NewItem, error) {
 	seen := map[string]bool{}
-	var titles []string
-	for _, t := range raw {
-		if strings.TrimSpace(t) == "" {
+	var items []db.NewItem
+	for _, it := range raw {
+		if strings.TrimSpace(it.Title) == "" {
 			continue
 		}
-		title, err := cleanText("title", t, maxItemTitleLen)
+		title, err := cleanText("title", it.Title, maxItemTitleLen)
 		if err != nil {
-			return nil, fmt.Errorf("%q: %w", t, err)
+			return nil, fmt.Errorf("%q: %w", it.Title, err)
 		}
-		if k := strings.ToLower(title); !seen[k] {
-			seen[k] = true
-			titles = append(titles, title)
+		k := strings.ToLower(title)
+		if seen[k] {
+			continue
 		}
+		seen[k] = true
+
+		fields, err := cleanFields(columns, it.Fields)
+		if err != nil {
+			return nil, fmt.Errorf("%q: %w", title, err)
+		}
+		items = append(items, db.NewItem{Title: title, Fields: fields})
 	}
-	if len(titles) == 0 {
+	if len(items) == 0 {
 		return nil, errors.New("title is required")
 	}
-	if len(titles) > maxItemsPerAdd {
+	if len(items) > maxItemsPerAdd {
 		return nil, fmt.Errorf("at most %d items at a time", maxItemsPerAdd)
 	}
-	return titles, nil
+	return items, nil
 }
 
 func handleSetVote(w http.ResponseWriter, r *http.Request, s db.Session) {
@@ -212,27 +246,59 @@ func handleSetVote(w http.ResponseWriter, r *http.Request, s db.Session) {
 	if !ok {
 		return
 	}
-	var body struct {
-		Value int `json:"value"`
-	}
+	var body voteBody
 	if !decodeBody(w, r, &body) {
 		return
 	}
-	if body.Value != 1 && body.Value != -1 {
-		writeError(w, http.StatusBadRequest, "value must be 1 or -1")
+	value, err := voteValue(s.Room, body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	err := db.SetVote(r.Context(), s.Room.ID, itemID, s.Member.ID, body.Value)
-	if errors.Is(err, db.ErrNotFound) {
+	var budget *int
+	if s.Room.VoteMode == "budget" {
+		budget = &s.Room.VotesPerMember
+	}
+	err = db.SetVote(r.Context(), s.Room.ID, itemID, s.Member.ID, value, budget)
+	switch {
+	case errors.Is(err, db.ErrNotFound):
 		writeError(w, http.StatusNotFound, "item not found")
-		return
-	}
-	if err != nil {
+	case errors.Is(err, db.ErrLimit):
+		writeError(w, http.StatusConflict, fmt.Sprintf("you only have %d votes", s.Room.VotesPerMember))
+	case err != nil:
 		internalError(w, "set vote", err)
-		return
+	default:
+		w.WriteHeader(http.StatusNoContent)
 	}
-	w.WriteHeader(http.StatusNoContent)
+}
+
+type voteBody struct {
+	Value *int `json:"value"`
+	Count *int `json:"count"`
+}
+
+// voteValue checks a vote against the room's mode: thumbs takes {value: ±1};
+// budget takes {count: n}, with n > 1 only when duplicate votes are allowed.
+// Clearing a vote is DELETE, not a zero.
+func voteValue(room db.Room, b voteBody) (int, error) {
+	if room.VoteMode == "budget" {
+		switch {
+		case b.Count == nil:
+			return 0, errors.New("this room uses a vote budget: send count")
+		case *b.Count < 1:
+			return 0, errors.New("count must be at least 1")
+		case *b.Count > 1 && !room.AllowDuplicateVotes:
+			return 0, errors.New("this room allows one vote per option")
+		case *b.Count > room.VotesPerMember:
+			return 0, fmt.Errorf("you only have %d votes", room.VotesPerMember)
+		}
+		return *b.Count, nil
+	}
+	if b.Value == nil || (*b.Value != 1 && *b.Value != -1) {
+		return 0, errors.New("value must be 1 or -1")
+	}
+	return *b.Value, nil
 }
 
 func handleClearVote(w http.ResponseWriter, r *http.Request, s db.Session) {

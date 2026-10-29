@@ -24,21 +24,34 @@ const (
 var columnTypes = map[string]bool{"text": true, "boolean": true, "textarea": true}
 
 func registerM2Routes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /rooms/{slug}/columns", withSession(requireAdmin(handleAddColumn)))
-	mux.HandleFunc("PATCH /rooms/{slug}/columns/{id}", withSession(requireAdmin(handleRenameColumn)))
-	mux.HandleFunc("DELETE /rooms/{slug}/columns/{id}", withSession(requireAdmin(handleDeleteColumn)))
-	mux.HandleFunc("PUT /rooms/{slug}/columns/order", withSession(requireAdmin(handleReorderColumns)))
+	mux.HandleFunc("PATCH /rooms/{slug}", withSession(requireAdmin(handleUpdateSettings)))
 
-	mux.HandleFunc("PATCH /rooms/{slug}/items/{id}", withSession(handleUpdateItem))
-	mux.HandleFunc("PUT /rooms/{slug}/items/order", withSession(requireAdmin(handleReorderItems)))
+	mux.HandleFunc("POST /rooms/{slug}/columns", withSession(requireAdmin(requireUnlocked(handleAddColumn))))
+	mux.HandleFunc("PATCH /rooms/{slug}/columns/{id}", withSession(requireAdmin(requireUnlocked(handleRenameColumn))))
+	mux.HandleFunc("DELETE /rooms/{slug}/columns/{id}", withSession(requireAdmin(requireUnlocked(handleDeleteColumn))))
+	mux.HandleFunc("PUT /rooms/{slug}/columns/order", withSession(requireAdmin(requireUnlocked(handleReorderColumns))))
+
+	mux.HandleFunc("PATCH /rooms/{slug}/items/{id}", withSession(requireUnlocked(handleUpdateItem)))
+	mux.HandleFunc("PUT /rooms/{slug}/items/order", withSession(requireAdmin(requireUnlocked(handleReorderItems))))
 
 	mux.HandleFunc("GET /rooms/{slug}/items/{id}/comments", withSession(handleListComments))
-	mux.HandleFunc("POST /rooms/{slug}/items/{id}/comments", withSession(handleAddComment))
-	mux.HandleFunc("PUT /rooms/{slug}/comments/{id}", withSession(handleEditComment))
-	mux.HandleFunc("DELETE /rooms/{slug}/comments/{id}", withSession(handleDeleteComment))
+	mux.HandleFunc("POST /rooms/{slug}/items/{id}/comments", withSession(requireUnlocked(handleAddComment)))
+	mux.HandleFunc("PUT /rooms/{slug}/comments/{id}", withSession(requireUnlocked(handleEditComment)))
+	mux.HandleFunc("DELETE /rooms/{slug}/comments/{id}", withSession(requireUnlocked(handleDeleteComment)))
 }
 
 type sessionHandler = func(http.ResponseWriter, *http.Request, db.Session)
+
+// requireUnlocked rejects changes while the room is locked in.
+func requireUnlocked(next sessionHandler) sessionHandler {
+	return func(w http.ResponseWriter, r *http.Request, s db.Session) {
+		if s.Room.LockedAt != nil {
+			writeError(w, http.StatusConflict, "this room is locked in")
+			return
+		}
+		next(w, r, s)
+	}
+}
 
 func requireAdmin(next sessionHandler) sessionHandler {
 	return func(w http.ResponseWriter, r *http.Request, s db.Session) {

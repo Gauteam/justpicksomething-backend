@@ -37,6 +37,7 @@ On Vercel (`VERCEL` is set) the API also rejects non-HTTPS requests and sends HS
 
 Authenticated endpoints take `Authorization: Bearer <token>`, where the token
 comes from creating or joining the room. A bad or missing token is `401`.
+While a room is locked in, every change except unlocking returns `409`.
 
 | Method | Path | Auth | Body → Response |
 | --- | --- | --- | --- |
@@ -44,9 +45,10 @@ comes from creating or joining the room. A bad or missing token is `401`.
 | `POST` | `/rooms` | — | `{name, displayName}` → `201 {slug, passcode, token}`; creator is admin |
 | `POST` | `/rooms/{slug}/join` | — | `{passcode, displayName}` → `201 {token}`; `401` wrong passcode, `404` no room, `409` name taken |
 | `GET` | `/rooms/{slug}` | ✓ | → `{room, me, members, columns, items}`; items sorted by score with `fields`, `position`, `commentCount`, `up`, `down`, `score`, `myVote`. `?since=<room.updatedAt>` → `{"unchanged":true}` if nothing changed (not `304`: Vercel drops CORS headers on 304s) |
-| `POST` | `/rooms/{slug}/items` | ✓ | `{title}` or `{titles: [...]}` (max 50) → `201 {items}`; blanks and titles already in the room (ignoring case) are skipped, so `items` may be shorter or empty |
-| `PUT` | `/rooms/{slug}/items/{id}/vote` | ✓ | `{value: 1 \| -1}` → `204` |
+| `POST` | `/rooms/{slug}/items` | ✓ | `{title}`, `{titles: [...]}` or `{items: [{title, fields?}]}` (max 50) → `201 {items}`; blanks and titles already in the room (ignoring case) are skipped, so `items` may be shorter or empty; `409` if it would pass `maxItems` |
+| `PUT` | `/rooms/{slug}/items/{id}/vote` | ✓ | thumbs mode `{value: 1 \| -1}`; budget mode `{count: n}` (`n` > 1 only with duplicate votes allowed) → `204`; `409` over the member's budget |
 | `DELETE` | `/rooms/{slug}/items/{id}/vote` | ✓ | → `204` |
+| `PATCH` | `/rooms/{slug}` | admin | `{name?, maxItems? (null = no limit), voteMode?: "thumbs" \| "budget", votesPerMember?, allowDuplicateVotes?, locked?}` → `204`. Changing `voteMode` clears all votes; turning off duplicates caps votes per option at 1. While locked only `{locked: false}` is accepted |
 | `PATCH` | `/rooms/{slug}/items/{id}` | ✓ | `{title?, fields?: {columnId: value \| null}}` → `204`; `""` or `null` clears a value; `409` title taken |
 | `PUT` | `/rooms/{slug}/items/order` | admin | `{ids: [...]}` (every item, in order) → `204`; `409` if the list is stale |
 | `POST` | `/rooms/{slug}/columns` | admin | `{name, type: "text" \| "boolean" \| "textarea"}` → `201` column; `409` name taken or 20 columns |
