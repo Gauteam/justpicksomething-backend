@@ -84,3 +84,37 @@ func TestSetVoteValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestCleanTitles(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      []string
+		want    []string
+		wantErr bool
+	}{
+		{"single", []string{"Lake house"}, []string{"Lake house"}, false},
+		{"trims and drops blanks", []string{"  Cabin ", "", "   ", "Tahoe"}, []string{"Cabin", "Tahoe"}, false},
+		{"dedupes ignoring case, keeps first", []string{"Tahoe", "Cabin", "tahoe"}, []string{"Tahoe", "Cabin"}, false},
+		{"all blank", []string{"", " "}, nil, true},
+		{"too long", []string{strings.Repeat("a", maxItemTitleLen+1)}, nil, true},
+		{"too many", func() []string {
+			var s []string
+			for i := range maxItemsPerAdd + 1 {
+				s = append(s, strings.Repeat("x", i+1))
+			}
+			return s
+		}(), nil, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := cleanTitles(tt.in)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if strings.Join(got, "|") != strings.Join(tt.want, "|") {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

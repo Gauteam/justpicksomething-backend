@@ -20,6 +20,7 @@ const (
 	maxRoomNameLen    = 100
 	maxDisplayNameLen = 40
 	maxItemTitleLen   = 200
+	maxItemsPerAdd    = 50
 	maxBodyBytes      = 16 << 10
 )
 
@@ -121,10 +122,11 @@ func handleJoinRoom(w http.ResponseWriter, r *http.Request) {
 
 func handleGetRoom(w http.ResponseWriter, r *http.Request, s db.Session) {
 	// Polling clients send the updatedAt they last saw; nothing changed means
-	// an empty 304 and no further queries.
+	// a tiny response and no further queries. Not a 304: Vercel strips the
+	// CORS headers from 304s, so browsers reject them.
 	if since := r.URL.Query().Get("since"); since != "" {
 		if t, err := time.Parse(time.RFC3339Nano, since); err == nil && t.Equal(s.Room.UpdatedAt) {
-			w.WriteHeader(http.StatusNotModified)
+			writeJSON(w, http.StatusOK, map[string]bool{"unchanged": true})
 			return
 		}
 	}
@@ -148,25 +150,55 @@ func handleGetRoom(w http.ResponseWriter, r *http.Request, s db.Session) {
 	})
 }
 
+// handleAddItem adds one item ({title}) or several at once ({titles}).
+// Blank entries and titles already in the room (ignoring case) are skipped.
 func handleAddItem(w http.ResponseWriter, r *http.Request, s db.Session) {
 	var body struct {
-		Title string `json:"title"`
+		Title  string   `json:"title"`
+		Titles []string `json:"titles"`
 	}
 	if !decodeBody(w, r, &body) {
 		return
 	}
-	title, err := cleanText("title", body.Title, maxItemTitleLen)
+	titles, err := cleanTitles(append(body.Titles, body.Title))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	item, err := db.AddItem(r.Context(), s.Room.ID, s.Member.ID, title)
+	items, err := db.AddItems(r.Context(), s.Room.ID, s.Member.ID, titles)
 	if err != nil {
-		internalError(w, "add item", err)
+		internalError(w, "add items", err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, item)
+	writeJSON(w, http.StatusCreated, map[string]any{"items": items})
+}
+
+// cleanTitles trims and validates titles, dropping blanks and case-insensitive
+// duplicates while keeping the original order.
+func cleanTitles(raw []string) ([]string, error) {
+	seen := map[string]bool{}
+	var titles []string
+	for _, t := range raw {
+		if strings.TrimSpace(t) == "" {
+			continue
+		}
+		title, err := cleanText("title", t, maxItemTitleLen)
+		if err != nil {
+			return nil, fmt.Errorf("%q: %w", t, err)
+		}
+		if k := strings.ToLower(title); !seen[k] {
+			seen[k] = true
+			titles = append(titles, title)
+		}
+	}
+	if len(titles) == 0 {
+		return nil, errors.New("title is required")
+	}
+	if len(titles) > maxItemsPerAdd {
+		return nil, fmt.Errorf("at most %d items at a time", maxItemsPerAdd)
+	}
+	return titles, nil
 }
 
 func handleSetVote(w http.ResponseWriter, r *http.Request, s db.Session) {

@@ -195,26 +195,44 @@ func Items(ctx context.Context, roomID, memberID string) ([]Item, error) {
 	return items, nil
 }
 
-// AddItem adds an item to a room.
-func AddItem(ctx context.Context, roomID, memberID, title string) (Item, error) {
+// AddItems adds items to a room in the given order, skipping titles already
+// in the room (ignoring case). It returns the items actually added.
+func AddItems(ctx context.Context, roomID, memberID string, titles []string) ([]Item, error) {
 	p, err := Pool()
 	if err != nil {
-		return Item{}, err
+		return nil, err
 	}
 
-	var it Item
+	var items []Item
 	err = pgx.BeginFunc(ctx, p, func(tx pgx.Tx) error {
-		err := tx.QueryRow(ctx, `
-			INSERT INTO items (room_id, title, created_by)
-			VALUES ($1, $2, $3)
+		// Offset created_at by position so the batch keeps its order when
+		// items tie on score.
+		rows, err := tx.Query(ctx, `
+			INSERT INTO items (room_id, title, created_by, created_at)
+			SELECT $1, t.title, $2, now() + t.ord * interval '1 microsecond'
+			FROM unnest($3::text[]) WITH ORDINALITY AS t(title, ord)
+			WHERE NOT EXISTS (
+				SELECT 1 FROM items i WHERE i.room_id = $1 AND lower(i.title) = lower(t.title)
+			)
 			RETURNING id, title, created_by, created_at
-		`, roomID, title, memberID).Scan(&it.ID, &it.Title, &it.CreatedBy, &it.CreatedAt)
+		`, roomID, memberID, titles)
 		if err != nil {
+			return err
+		}
+		items, err = pgx.CollectRows(rows, func(row pgx.CollectableRow) (Item, error) {
+			var it Item
+			err := row.Scan(&it.ID, &it.Title, &it.CreatedBy, &it.CreatedAt)
+			return it, err
+		})
+		if err != nil || len(items) == 0 {
 			return err
 		}
 		return touchRoom(ctx, tx, roomID)
 	})
-	return it, err
+	if items == nil {
+		items = []Item{}
+	}
+	return items, err
 }
 
 // SetVote sets memberID's vote on an item. It returns ErrNotFound if the item

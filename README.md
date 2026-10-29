@@ -43,8 +43,8 @@ comes from creating or joining the room. A bad or missing token is `401`.
 | `GET` | `/health` | — | → `{"status":"ok","db":"ok"}`, or `503` if the database is unreachable |
 | `POST` | `/rooms` | — | `{name, displayName}` → `201 {slug, passcode, token}`; creator is admin |
 | `POST` | `/rooms/{slug}/join` | — | `{passcode, displayName}` → `201 {token}`; `401` wrong passcode, `404` no room, `409` name taken |
-| `GET` | `/rooms/{slug}` | ✓ | → `{room, me, members, items}`; items sorted by score with `up`, `down`, `score`, `myVote`. `?since=<room.updatedAt>` → `304` if nothing changed |
-| `POST` | `/rooms/{slug}/items` | ✓ | `{title}` → `201` item |
+| `GET` | `/rooms/{slug}` | ✓ | → `{room, me, members, items}`; items sorted by score with `up`, `down`, `score`, `myVote`. `?since=<room.updatedAt>` → `{"unchanged":true}` if nothing changed (not `304`: Vercel drops CORS headers on 304s) |
+| `POST` | `/rooms/{slug}/items` | ✓ | `{title}` or `{titles: [...]}` (max 50) → `201 {items}`; blanks and titles already in the room (ignoring case) are skipped, so `items` may be shorter or empty |
 | `PUT` | `/rooms/{slug}/items/{id}/vote` | ✓ | `{value: 1 \| -1}` → `204` |
 | `DELETE` | `/rooms/{slug}/items/{id}/vote` | ✓ | → `204` |
 
