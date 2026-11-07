@@ -37,6 +37,7 @@ func TestSettingsPatch(t *testing.T) {
 		{"too many votes", `{"votesPerMember":101}`, nil, true},
 		{"blank name", `{"name":"  "}`, nil, true},
 		{"name trimmed", `{"name":" Trip "}`, func(p db.SettingsPatch) bool { return *p.Name == "Trip" }, false},
+		{"everyone admin", `{"everyoneAdmin":true}`, func(p db.SettingsPatch) bool { return *p.EveryoneAdmin }, false},
 	}
 
 	for _, tt := range tests {
@@ -56,6 +57,9 @@ func TestChangesMoreThanLock(t *testing.T) {
 	f, tr := false, true
 	if changesMoreThanLock(db.SettingsPatch{Locked: &f}) {
 		t.Error("unlock-only patch reported as a settings change")
+	}
+	if !changesMoreThanLock(db.SettingsPatch{EveryoneAdmin: &tr}) {
+		t.Error("everyoneAdmin change not detected")
 	}
 	if !changesMoreThanLock(db.SettingsPatch{Locked: &f, AllowDuplicateVotes: &tr}) {
 		t.Error("settings change not detected")

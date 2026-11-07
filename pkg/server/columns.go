@@ -25,6 +25,7 @@ var columnTypes = map[string]bool{"text": true, "boolean": true, "textarea": tru
 
 func registerM2Routes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /rooms/{slug}", withSession(requireAdmin(handleUpdateSettings)))
+	registerMemberRoutes(mux)
 
 	mux.HandleFunc("POST /rooms/{slug}/columns", withSession(requireAdmin(requireUnlocked(handleAddColumn))))
 	mux.HandleFunc("PATCH /rooms/{slug}/columns/{id}", withSession(requireAdmin(requireUnlocked(handleRenameColumn))))

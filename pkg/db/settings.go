@@ -20,6 +20,7 @@ type SettingsPatch struct {
 	VoteMode            *string
 	VotesPerMember      *int
 	AllowDuplicateVotes *bool
+	EveryoneAdmin       *bool
 	Locked              *bool
 }
 
@@ -45,13 +46,14 @@ func UpdateSettings(ctx context.Context, room Room, p SettingsPatch) error {
 				vote_mode = COALESCE($5, vote_mode),
 				votes_per_member = COALESCE($6, votes_per_member),
 				allow_duplicate_votes = COALESCE($7, allow_duplicate_votes),
+				everyone_admin = COALESCE($9, everyone_admin),
 				locked_at = CASE
 					WHEN $8::boolean IS NULL THEN locked_at
 					WHEN $8 THEN COALESCE(locked_at, now())
 					ELSE NULL
 				END
 			WHERE id = $1
-		`, room.ID, p.Name, p.SetMaxItems, p.MaxItems, p.VoteMode, p.VotesPerMember, p.AllowDuplicateVotes, p.Locked)
+		`, room.ID, p.Name, p.SetMaxItems, p.MaxItems, p.VoteMode, p.VotesPerMember, p.AllowDuplicateVotes, p.Locked, p.EveryoneAdmin)
 		if err != nil {
 			return err
 		}

@@ -37,8 +37,22 @@ func handleCreateRoom(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name        string `json:"name"`
 		DisplayName string `json:"displayName"`
+		// Starting columns, e.g. from a template.
+		Columns []struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+		} `json:"columns"`
 	}
 	if !decodeBody(w, r, &body) {
+		return
+	}
+	var columns []db.NewColumn
+	for _, c := range body.Columns {
+		columns = append(columns, db.NewColumn{Name: c.Name, Type: c.Type})
+	}
+	columns, err := cleanNewColumns(columns)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	name, err := cleanText("name", body.Name, maxRoomNameLen)
@@ -62,7 +76,7 @@ func handleCreateRoom(w http.ResponseWriter, r *http.Request) {
 
 	var s db.Session
 	for range 3 {
-		s, err = db.CreateRoom(r.Context(), auth.NewSlug(), name, passcodeHash, displayName, tokenHash)
+		s, err = db.CreateRoom(r.Context(), auth.NewSlug(), name, passcodeHash, displayName, tokenHash, columns)
 		if !errors.Is(err, db.ErrSlugTaken) {
 			break
 		}

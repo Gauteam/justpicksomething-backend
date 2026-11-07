@@ -28,6 +28,15 @@ type Room struct {
 	VotesPerMember      int        `json:"votesPerMember"`
 	AllowDuplicateVotes bool       `json:"allowDuplicateVotes"`
 	LockedAt            *time.Time `json:"lockedAt"`
+	// Every member can do admin things.
+	EveryoneAdmin     bool      `json:"everyoneAdmin"`
+	PasscodeChangedAt time.Time `json:"passcodeChangedAt"`
+}
+
+// NewColumn is a column to create along with a room (from a template).
+type NewColumn struct {
+	Name string
+	Type string
 }
 
 // NewItem is an item to add, with optional column values.
@@ -63,8 +72,9 @@ type Session struct {
 	Member Member
 }
 
-// CreateRoom inserts a room and its first (admin) member.
-func CreateRoom(ctx context.Context, slug, name, passcodeHash, displayName string, tokenHash []byte) (Session, error) {
+// CreateRoom inserts a room, its first (admin) member, and any starting
+// columns.
+func CreateRoom(ctx context.Context, slug, name, passcodeHash, displayName string, tokenHash []byte, columns []NewColumn) (Session, error) {
 	p, err := Pool()
 	if err != nil {
 		return Session{}, err
@@ -85,7 +95,19 @@ func CreateRoom(ctx context.Context, slug, name, passcodeHash, displayName strin
 		}
 
 		s.Member, err = insertMember(ctx, tx, s.Room.ID, displayName, tokenHash, true)
-		return err
+		if err != nil {
+			return err
+		}
+
+		for i, c := range columns {
+			_, err := tx.Exec(ctx, `
+				INSERT INTO columns (room_id, name, type, position) VALUES ($1, $2, $3, $4)
+			`, s.Room.ID, c.Name, c.Type, i+1)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	return s, err
 }
@@ -134,13 +156,15 @@ func SessionByToken(ctx context.Context, slug string, tokenHash []byte) (Session
 		SELECT
 			r.id, r.slug, r.name, r.updated_at,
 			r.max_items, r.vote_mode, r.votes_per_member, r.allow_duplicate_votes, r.locked_at,
-			m.id, m.display_name, m.is_admin
+			r.everyone_admin, r.passcode_changed_at,
+			m.id, m.display_name, m.is_admin OR r.everyone_admin
 		FROM members m
 		JOIN rooms r ON r.id = m.room_id
 		WHERE m.token_hash = $1 AND r.slug = $2
 	`, tokenHash, slug).Scan(
 		&s.Room.ID, &s.Room.Slug, &s.Room.Name, &s.Room.UpdatedAt,
 		&s.Room.MaxItems, &s.Room.VoteMode, &s.Room.VotesPerMember, &s.Room.AllowDuplicateVotes, &s.Room.LockedAt,
+		&s.Room.EveryoneAdmin, &s.Room.PasscodeChangedAt,
 		&s.Member.ID, &s.Member.DisplayName, &s.Member.IsAdmin,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {

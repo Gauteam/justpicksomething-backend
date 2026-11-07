@@ -18,6 +18,7 @@ type settingsBody struct {
 	VoteMode            *string         `json:"voteMode"`
 	VotesPerMember      *int            `json:"votesPerMember"`
 	AllowDuplicateVotes *bool           `json:"allowDuplicateVotes"`
+	EveryoneAdmin       *bool           `json:"everyoneAdmin"`
 	Locked              *bool           `json:"locked"`
 }
 
@@ -51,7 +52,7 @@ func handleUpdateSettings(w http.ResponseWriter, r *http.Request, s db.Session) 
 }
 
 func settingsPatch(room db.Room, b settingsBody) (db.SettingsPatch, error) {
-	p := db.SettingsPatch{VoteMode: b.VoteMode, VotesPerMember: b.VotesPerMember, AllowDuplicateVotes: b.AllowDuplicateVotes, Locked: b.Locked}
+	p := db.SettingsPatch{VoteMode: b.VoteMode, VotesPerMember: b.VotesPerMember, AllowDuplicateVotes: b.AllowDuplicateVotes, EveryoneAdmin: b.EveryoneAdmin, Locked: b.Locked}
 
 	if b.Name != nil {
 		name, err := cleanText("name", *b.Name, maxRoomNameLen)
@@ -80,5 +81,5 @@ func settingsPatch(room db.Room, b settingsBody) (db.SettingsPatch, error) {
 }
 
 func changesMoreThanLock(p db.SettingsPatch) bool {
-	return p.Name != nil || p.SetMaxItems || p.VoteMode != nil || p.VotesPerMember != nil || p.AllowDuplicateVotes != nil
+	return p.Name != nil || p.SetMaxItems || p.VoteMode != nil || p.VotesPerMember != nil || p.AllowDuplicateVotes != nil || p.EveryoneAdmin != nil
 }
