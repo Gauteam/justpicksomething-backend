@@ -32,7 +32,7 @@ func registerM2Routes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /rooms/{slug}/columns/{id}", withSession(requireAdmin(requireUnlocked(handleDeleteColumn))))
 	mux.HandleFunc("PUT /rooms/{slug}/columns/order", withSession(requireAdmin(requireUnlocked(handleReorderColumns))))
 
-	mux.HandleFunc("PATCH /rooms/{slug}/items/{id}", withSession(requireUnlocked(handleUpdateItem)))
+	mux.HandleFunc("PATCH /rooms/{slug}/items/{id}", withSession(requireAdmin(requireUnlocked(handleUpdateItem))))
 	mux.HandleFunc("PUT /rooms/{slug}/items/order", withSession(requireAdmin(requireUnlocked(handleReorderItems))))
 
 	mux.HandleFunc("GET /rooms/{slug}/items/{id}/comments", withSession(handleListComments))
@@ -143,8 +143,8 @@ func handleReorderItems(w http.ResponseWriter, r *http.Request, s db.Session) {
 	writeMutationResult(w, err, "reorder items", "item", "")
 }
 
-// handleUpdateItem edits an item's title and/or column values. Any member can
-// edit any item. In fields, null or "" clears a value.
+// handleUpdateItem edits an item's title and/or column values (admins only).
+// In fields, null or "" clears a value.
 func handleUpdateItem(w http.ResponseWriter, r *http.Request, s db.Session) {
 	id, ok := idFromPath(w, r, "item")
 	if !ok {
