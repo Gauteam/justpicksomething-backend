@@ -33,6 +33,7 @@ func registerM2Routes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /rooms/{slug}/columns/order", withSession(requireAdmin(requireUnlocked(handleReorderColumns))))
 
 	mux.HandleFunc("PATCH /rooms/{slug}/items/{id}", withSession(requireAdmin(requireUnlocked(handleUpdateItem))))
+	mux.HandleFunc("DELETE /rooms/{slug}/items/{id}", withSession(requireAdmin(requireUnlocked(handleDeleteItem))))
 	mux.HandleFunc("PUT /rooms/{slug}/items/order", withSession(requireAdmin(requireUnlocked(handleReorderItems))))
 
 	mux.HandleFunc("GET /rooms/{slug}/items/{id}/comments", withSession(handleListComments))
@@ -181,6 +182,17 @@ func handleUpdateItem(w http.ResponseWriter, r *http.Request, s db.Session) {
 
 	err = db.UpdateItem(r.Context(), s.Room.ID, id, title, fields)
 	writeMutationResult(w, err, "update item", "item", "another option already has that name")
+}
+
+// handleDeleteItem deletes an option with its votes and comments (admins
+// only).
+func handleDeleteItem(w http.ResponseWriter, r *http.Request, s db.Session) {
+	id, ok := idFromPath(w, r, "item")
+	if !ok {
+		return
+	}
+	err := db.DeleteItem(r.Context(), s.Room.ID, id)
+	writeMutationResult(w, err, "delete item", "item", "")
 }
 
 // cleanFields validates raw column values against the room's columns.

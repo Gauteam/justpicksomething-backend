@@ -190,6 +190,18 @@ func UpdateItem(ctx context.Context, roomID, itemID string, title *string, field
 	})
 }
 
+// DeleteItem deletes an option; its votes and comments go with it (foreign
+// key cascades).
+func DeleteItem(ctx context.Context, roomID, itemID string) error {
+	return execInRoom(ctx, roomID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `DELETE FROM items WHERE id = $2 AND room_id = $1`, roomID, itemID)
+		if err == nil && tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return err
+	})
+}
+
 // Comments lists an item's comments, oldest first.
 func Comments(ctx context.Context, roomID, itemID string) ([]Comment, error) {
 	p, err := Pool()

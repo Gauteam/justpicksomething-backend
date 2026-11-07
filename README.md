@@ -53,6 +53,7 @@ While a room is locked in, every change except unlocking returns `409`.
 | `DELETE` | `/rooms/{slug}/members/{id}` | admin | → `204`; revokes their token and deletes their votes and comments; `409` if it would leave no admin |
 | `POST` | `/rooms/{slug}/passcode` | admin | → `{passcode, passcodeChangedAt}`; new passcode, shown once; members stay joined |
 | `PATCH` | `/rooms/{slug}/items/{id}` | admin | `{title?, fields?: {columnId: value \| null}}` → `204`; `""` or `null` clears a value; `409` title taken |
+| `DELETE` | `/rooms/{slug}/items/{id}` | admin | → `204`; deletes the option with its votes and comments |
 | `PUT` | `/rooms/{slug}/items/order` | admin | `{ids: [...]}` (every item, in order) → `204`; `409` if the list is stale |
 | `POST` | `/rooms/{slug}/columns` | admin | `{name, type: "text" \| "boolean" \| "textarea"}` → `201` column; `409` name taken or 20 columns |
 | `PATCH` | `/rooms/{slug}/columns/{id}` | admin | `{name}` → `204` |

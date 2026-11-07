@@ -103,3 +103,14 @@ func TestDecodeCommentBody(t *testing.T) {
 		}
 	}
 }
+
+func TestDeleteItemRejectsBadID(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/rooms/abc/items/nope", nil)
+	req.SetPathValue("id", "nope")
+	handleDeleteItem(rec, req, db.Session{Member: db.Member{IsAdmin: true}})
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
