@@ -60,6 +60,8 @@ type Item struct {
 	Fields       map[string]any `json:"fields"`
 	Position     int            `json:"position"`
 	CommentCount int            `json:"commentCount"`
+	// Comments on single cells, by column ID (included in CommentCount).
+	CellComments map[string]int `json:"cellComments"`
 	Up           int            `json:"up"`
 	Down         int            `json:"down"`
 	Score        int            `json:"score"`
@@ -213,6 +215,9 @@ func Items(ctx context.Context, roomID, memberID string) ([]Item, error) {
 			i.fields,
 			i.position,
 			(SELECT count(*) FROM comments c WHERE c.item_id = i.id),
+			(SELECT COALESCE(jsonb_object_agg(x.column_id, x.n), '{}'::jsonb)
+				FROM (SELECT column_id, count(*) AS n FROM comments c
+					WHERE c.item_id = i.id AND c.column_id IS NOT NULL GROUP BY column_id) x),
 			COALESCE(SUM(v.value) FILTER (WHERE v.value > 0), 0),
 			COALESCE(-SUM(v.value) FILTER (WHERE v.value < 0), 0),
 			COALESCE(MAX(v.value) FILTER (WHERE v.member_id = $2), 0)
@@ -227,7 +232,7 @@ func Items(ctx context.Context, roomID, memberID string) ([]Item, error) {
 	items, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Item, error) {
 		var it Item
 		err := row.Scan(
-			&it.ID, &it.Title, &it.CreatedBy, &it.CreatedAt, &it.Fields, &it.Position, &it.CommentCount,
+			&it.ID, &it.Title, &it.CreatedBy, &it.CreatedAt, &it.Fields, &it.Position, &it.CommentCount, &it.CellComments,
 			&it.Up, &it.Down, &it.MyVote,
 		)
 		it.Score = it.Up - it.Down

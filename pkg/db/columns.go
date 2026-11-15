@@ -25,8 +25,11 @@ type Column struct {
 }
 
 type Comment struct {
-	ID        string     `json:"id"`
-	ItemID    string     `json:"itemId"`
+	ID     string `json:"id"`
+	ItemID string `json:"itemId"`
+	// Set when the comment is about one cell (this column's value) rather
+	// than the whole item.
+	ColumnID  *string    `json:"columnId"`
 	AuthorID  string     `json:"authorId"`
 	Body      string     `json:"body"`
 	CreatedAt time.Time  `json:"createdAt"`
@@ -210,7 +213,7 @@ func Comments(ctx context.Context, roomID, itemID string) ([]Comment, error) {
 	}
 
 	rows, err := p.Query(ctx, `
-		SELECT id, item_id, member_id, body, created_at, edited_at
+		SELECT id, item_id, column_id, member_id, body, created_at, edited_at
 		FROM comments
 		WHERE room_id = $1 AND item_id = $2
 		ORDER BY created_at
@@ -221,17 +224,18 @@ func Comments(ctx context.Context, roomID, itemID string) ([]Comment, error) {
 	return pgx.CollectRows(rows, scanComment)
 }
 
-// AddComment adds a comment. It returns ErrNotFound if the item isn't in the
-// room.
-func AddComment(ctx context.Context, roomID, itemID, memberID, body string) (Comment, error) {
+// AddComment adds a comment on an item, or on one of its cells when columnID
+// is set. It returns ErrNotFound if the item (or column) isn't in the room.
+func AddComment(ctx context.Context, roomID, itemID, memberID, body string, columnID *string) (Comment, error) {
 	var c Comment
 	err := execInRoom(ctx, roomID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
-			INSERT INTO comments (room_id, item_id, member_id, body)
-			SELECT $1, $2, $3, $4
+			INSERT INTO comments (room_id, item_id, member_id, body, column_id)
+			SELECT $1, $2, $3, $4, $5
 			WHERE EXISTS (SELECT 1 FROM items WHERE id = $2 AND room_id = $1)
-			RETURNING id, item_id, member_id, body, created_at, edited_at
-		`, roomID, itemID, memberID, body)
+				AND ($5::uuid IS NULL OR EXISTS (SELECT 1 FROM columns WHERE id = $5 AND room_id = $1))
+			RETURNING id, item_id, column_id, member_id, body, created_at, edited_at
+		`, roomID, itemID, memberID, body, columnID)
 		if err != nil {
 			return err
 		}
@@ -286,7 +290,7 @@ func DeleteComment(ctx context.Context, roomID, commentID string) error {
 
 func scanComment(row pgx.CollectableRow) (Comment, error) {
 	var c Comment
-	err := row.Scan(&c.ID, &c.ItemID, &c.AuthorID, &c.Body, &c.CreatedAt, &c.EditedAt)
+	err := row.Scan(&c.ID, &c.ItemID, &c.ColumnID, &c.AuthorID, &c.Body, &c.CreatedAt, &c.EditedAt)
 	return c, err
 }
 

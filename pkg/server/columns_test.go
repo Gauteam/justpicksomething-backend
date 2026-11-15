@@ -97,7 +97,7 @@ func TestDecodeCommentBody(t *testing.T) {
 
 	for _, tt := range tests {
 		rec := httptest.NewRecorder()
-		got, ok := decodeCommentBody(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tt.body)))
+		got, _, ok := decodeCommentBody(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tt.body)))
 		if ok != tt.ok || got != tt.wanted {
 			t.Errorf("decodeCommentBody(%.30q) = %q, %v; want %q, %v", tt.body, got, ok, tt.wanted, tt.ok)
 		}
@@ -112,5 +112,30 @@ func TestDeleteItemRejectsBadID(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestDecodeCommentBodyColumn(t *testing.T) {
+	const col = "6f1c2c1e-4b9a-4c55-9a39-2f1b5f0c8d11"
+	tests := []struct {
+		body    string
+		wantCol string
+		ok      bool
+	}{
+		{`{"body":"hi"}`, "", true},
+		{`{"body":"hi","columnId":""}`, "", true},
+		{`{"body":"hi","columnId":"` + col + `"}`, col, true},
+		{`{"body":"hi","columnId":"nope"}`, "", false},
+	}
+	for _, tt := range tests {
+		rec := httptest.NewRecorder()
+		_, colID, ok := decodeCommentBody(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tt.body)))
+		got := ""
+		if colID != nil {
+			got = *colID
+		}
+		if ok != tt.ok || got != tt.wantCol {
+			t.Errorf("decodeCommentBody(%s) column = %q, ok %v; want %q, %v", tt.body, got, ok, tt.wantCol, tt.ok)
+		}
 	}
 }

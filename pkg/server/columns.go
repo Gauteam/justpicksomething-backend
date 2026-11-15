@@ -281,14 +281,14 @@ func handleAddComment(w http.ResponseWriter, r *http.Request, s db.Session) {
 	if !ok {
 		return
 	}
-	body, ok := decodeCommentBody(w, r)
+	body, columnID, ok := decodeCommentBody(w, r)
 	if !ok {
 		return
 	}
 
-	c, err := db.AddComment(r.Context(), s.Room.ID, id, s.Member.ID, body)
+	c, err := db.AddComment(r.Context(), s.Room.ID, id, s.Member.ID, body, columnID)
 	if errors.Is(err, db.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "item not found")
+		writeError(w, http.StatusNotFound, "item or column not found")
 		return
 	}
 	if err != nil {
@@ -304,7 +304,7 @@ func handleEditComment(w http.ResponseWriter, r *http.Request, s db.Session) {
 	if !ok {
 		return
 	}
-	body, ok := decodeCommentBody(w, r)
+	body, _, ok := decodeCommentBody(w, r)
 	if !ok {
 		return
 	}
@@ -346,12 +346,15 @@ func canChangeComment(w http.ResponseWriter, r *http.Request, s db.Session, comm
 	return true
 }
 
-func decodeCommentBody(w http.ResponseWriter, r *http.Request) (string, bool) {
+// decodeCommentBody reads {body, columnId?}. columnId (a cell comment) is only
+// used when adding; editing ignores it.
+func decodeCommentBody(w http.ResponseWriter, r *http.Request) (string, *string, bool) {
 	var body struct {
-		Body string `json:"body"`
+		Body     string  `json:"body"`
+		ColumnID *string `json:"columnId"`
 	}
 	if !decodeBody(w, r, &body) {
-		return "", false
+		return "", nil, false
 	}
 	text, err := cleanValue("comment", body.Body, maxCommentBodyLen, true)
 	if err == nil && text == "" {
@@ -359,9 +362,19 @@ func decodeCommentBody(w http.ResponseWriter, r *http.Request) (string, bool) {
 	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
-		return "", false
+		return "", nil, false
 	}
-	return text, true
+	var columnID *string
+	if body.ColumnID != nil && *body.ColumnID != "" {
+		u, err := uuid.Parse(*body.ColumnID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "columnId must be a UUID")
+			return "", nil, false
+		}
+		id := u.String()
+		columnID = &id
+	}
+	return text, columnID, true
 }
 
 func decodeIDs(w http.ResponseWriter, r *http.Request) ([]string, bool) {
