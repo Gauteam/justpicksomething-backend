@@ -62,10 +62,14 @@ type Item struct {
 	CommentCount int            `json:"commentCount"`
 	// Comments on single cells, by column ID (included in CommentCount).
 	CellComments map[string]int `json:"cellComments"`
-	Up           int            `json:"up"`
-	Down         int            `json:"down"`
-	Score        int            `json:"score"`
-	MyVote       int            `json:"myVote"`
+	// Who commented: member IDs on the whole item (any comment), and per
+	// cell, by column ID. Used for the colored dots on the 💬 buttons.
+	Commenters     []string            `json:"commenters"`
+	CellCommenters map[string][]string `json:"cellCommenters"`
+	Up             int                 `json:"up"`
+	Down           int                 `json:"down"`
+	Score          int                 `json:"score"`
+	MyVote         int                 `json:"myVote"`
 }
 
 // Session is an authenticated member and the room they belong to.
@@ -218,6 +222,10 @@ func Items(ctx context.Context, roomID, memberID string) ([]Item, error) {
 			(SELECT COALESCE(jsonb_object_agg(x.column_id, x.n), '{}'::jsonb)
 				FROM (SELECT column_id, count(*) AS n FROM comments c
 					WHERE c.item_id = i.id AND c.column_id IS NOT NULL GROUP BY column_id) x),
+			(SELECT COALESCE(jsonb_agg(DISTINCT c.member_id), '[]'::jsonb) FROM comments c WHERE c.item_id = i.id),
+			(SELECT COALESCE(jsonb_object_agg(y.column_id, y.ids), '{}'::jsonb)
+				FROM (SELECT column_id, jsonb_agg(DISTINCT member_id) AS ids FROM comments c
+					WHERE c.item_id = i.id AND c.column_id IS NOT NULL GROUP BY column_id) y),
 			COALESCE(SUM(v.value) FILTER (WHERE v.value > 0), 0),
 			COALESCE(-SUM(v.value) FILTER (WHERE v.value < 0), 0),
 			COALESCE(MAX(v.value) FILTER (WHERE v.member_id = $2), 0)
@@ -233,6 +241,7 @@ func Items(ctx context.Context, roomID, memberID string) ([]Item, error) {
 		var it Item
 		err := row.Scan(
 			&it.ID, &it.Title, &it.CreatedBy, &it.CreatedAt, &it.Fields, &it.Position, &it.CommentCount, &it.CellComments,
+			&it.Commenters, &it.CellCommenters,
 			&it.Up, &it.Down, &it.MyVote,
 		)
 		it.Score = it.Up - it.Down

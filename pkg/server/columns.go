@@ -323,12 +323,12 @@ func handleAddComment(w http.ResponseWriter, r *http.Request, s db.Session) {
 	if !ok {
 		return
 	}
-	body, columnID, ok := decodeCommentBody(w, r)
+	in, ok := decodeCommentBody(w, r, true)
 	if !ok {
 		return
 	}
 
-	c, err := db.AddComment(r.Context(), s.Room.ID, id, s.Member.ID, body, columnID)
+	c, err := db.AddComment(r.Context(), s.Room.ID, id, s.Member.ID, in.Text, in.Kind, in.ColumnID)
 	if errors.Is(err, db.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "item or column not found")
 		return
@@ -346,10 +346,11 @@ func handleEditComment(w http.ResponseWriter, r *http.Request, s db.Session) {
 	if !ok {
 		return
 	}
-	body, _, ok := decodeCommentBody(w, r)
+	in, ok := decodeCommentBody(w, r, false)
 	if !ok {
 		return
 	}
+	body := in.Text
 	if !canChangeComment(w, r, s, id, false) {
 		return
 	}
@@ -388,35 +389,53 @@ func canChangeComment(w http.ResponseWriter, r *http.Request, s db.Session, comm
 	return true
 }
 
-// decodeCommentBody reads {body, columnId?}. columnId (a cell comment) is only
-// used when adding; editing ignores it.
-func decodeCommentBody(w http.ResponseWriter, r *http.Request) (string, *string, bool) {
+var commentKinds = map[string]bool{"comment": true, "emphasis": true, "up": true, "down": true}
+
+type commentInput struct {
+	Text     string
+	ColumnID *string // a cell comment (adding only)
+	Kind     string  // comment, emphasis, up or down (adding only)
+}
+
+// decodeCommentBody reads {body, columnId?, kind?}. When adding, text is
+// required only for a plain comment (the others are signals that can stand
+// alone); editing always needs text.
+func decodeCommentBody(w http.ResponseWriter, r *http.Request, adding bool) (commentInput, bool) {
 	var body struct {
 		Body     string  `json:"body"`
 		ColumnID *string `json:"columnId"`
+		Kind     string  `json:"kind"`
 	}
 	if !decodeBody(w, r, &body) {
-		return "", nil, false
+		return commentInput{}, false
+	}
+	in := commentInput{Kind: body.Kind}
+	if in.Kind == "" {
+		in.Kind = "comment"
+	}
+	if !commentKinds[in.Kind] {
+		writeError(w, http.StatusBadRequest, "kind must be comment, emphasis, up or down")
+		return commentInput{}, false
 	}
 	text, err := cleanValue("comment", body.Body, maxCommentBodyLen, true)
-	if err == nil && text == "" {
+	if err == nil && text == "" && (!adding || in.Kind == "comment") {
 		err = errors.New("comment is required")
 	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
-		return "", nil, false
+		return commentInput{}, false
 	}
-	var columnID *string
+	in.Text = text
 	if body.ColumnID != nil && *body.ColumnID != "" {
 		u, err := uuid.Parse(*body.ColumnID)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "columnId must be a UUID")
-			return "", nil, false
+			return commentInput{}, false
 		}
 		id := u.String()
-		columnID = &id
+		in.ColumnID = &id
 	}
-	return text, columnID, true
+	return in, true
 }
 
 func decodeIDs(w http.ResponseWriter, r *http.Request) ([]string, bool) {

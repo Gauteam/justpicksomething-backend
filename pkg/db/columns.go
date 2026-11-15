@@ -29,9 +29,11 @@ type Comment struct {
 	ItemID string `json:"itemId"`
 	// Set when the comment is about one cell (this column's value) rather
 	// than the whole item.
-	ColumnID  *string    `json:"columnId"`
-	AuthorID  string     `json:"authorId"`
-	Body      string     `json:"body"`
+	ColumnID *string `json:"columnId"`
+	AuthorID string  `json:"authorId"`
+	Body     string  `json:"body"`
+	// comment, emphasis (!!), up (👍) or down (👎).
+	Kind      string     `json:"kind"`
 	CreatedAt time.Time  `json:"createdAt"`
 	EditedAt  *time.Time `json:"editedAt"`
 	// Emphasis from members: ★ (+1) and ⚑ (-1) counts, and the viewer's own.
@@ -213,7 +215,7 @@ func DeleteItem(ctx context.Context, roomID, itemID string) error {
 // reaction ($1 is the room, $2 the viewing member).
 const commentSelect = `
 	SELECT
-		c.id, c.item_id, c.column_id, c.member_id, c.body, c.created_at, c.edited_at,
+		c.id, c.item_id, c.column_id, c.member_id, c.body, c.kind, c.created_at, c.edited_at,
 		COALESCE(SUM(1) FILTER (WHERE r.value = 1), 0),
 		COALESCE(SUM(1) FILTER (WHERE r.value = -1), 0),
 		COALESCE(MAX(r.value) FILTER (WHERE r.member_id = $2), 0)
@@ -274,16 +276,16 @@ func ClearReaction(ctx context.Context, roomID, commentID, memberID string) erro
 
 // AddComment adds a comment on an item, or on one of its cells when columnID
 // is set. It returns ErrNotFound if the item (or column) isn't in the room.
-func AddComment(ctx context.Context, roomID, itemID, memberID, body string, columnID *string) (Comment, error) {
+func AddComment(ctx context.Context, roomID, itemID, memberID, body, kind string, columnID *string) (Comment, error) {
 	var c Comment
 	err := execInRoom(ctx, roomID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
-			INSERT INTO comments (room_id, item_id, member_id, body, column_id)
-			SELECT $1, $2, $3, $4, $5
+			INSERT INTO comments (room_id, item_id, member_id, body, column_id, kind)
+			SELECT $1, $2, $3, $4, $5, $6
 			WHERE EXISTS (SELECT 1 FROM items WHERE id = $2 AND room_id = $1)
 				AND ($5::uuid IS NULL OR EXISTS (SELECT 1 FROM columns WHERE id = $5 AND room_id = $1))
-			RETURNING id, item_id, column_id, member_id, body, created_at, edited_at, 0, 0, 0
-		`, roomID, itemID, memberID, body, columnID)
+			RETURNING id, item_id, column_id, member_id, body, kind, created_at, edited_at, 0, 0, 0
+		`, roomID, itemID, memberID, body, columnID, kind)
 		if err != nil {
 			return err
 		}
@@ -339,7 +341,7 @@ func DeleteComment(ctx context.Context, roomID, commentID string) error {
 func scanComment(row pgx.CollectableRow) (Comment, error) {
 	var c Comment
 	err := row.Scan(
-		&c.ID, &c.ItemID, &c.ColumnID, &c.AuthorID, &c.Body, &c.CreatedAt, &c.EditedAt,
+		&c.ID, &c.ItemID, &c.ColumnID, &c.AuthorID, &c.Body, &c.Kind, &c.CreatedAt, &c.EditedAt,
 		&c.Stars, &c.Concerns, &c.MyReaction,
 	)
 	return c, err

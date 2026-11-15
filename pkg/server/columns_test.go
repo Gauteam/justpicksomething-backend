@@ -97,7 +97,8 @@ func TestDecodeCommentBody(t *testing.T) {
 
 	for _, tt := range tests {
 		rec := httptest.NewRecorder()
-		got, _, ok := decodeCommentBody(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tt.body)))
+		in, ok := decodeCommentBody(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tt.body)), true)
+		got := in.Text
 		if ok != tt.ok || got != tt.wanted {
 			t.Errorf("decodeCommentBody(%.30q) = %q, %v; want %q, %v", tt.body, got, ok, tt.wanted, tt.ok)
 		}
@@ -129,10 +130,10 @@ func TestDecodeCommentBodyColumn(t *testing.T) {
 	}
 	for _, tt := range tests {
 		rec := httptest.NewRecorder()
-		_, colID, ok := decodeCommentBody(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tt.body)))
+		in, ok := decodeCommentBody(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tt.body)), true)
 		got := ""
-		if colID != nil {
-			got = *colID
+		if in.ColumnID != nil {
+			got = *in.ColumnID
 		}
 		if ok != tt.ok || got != tt.wantCol {
 			t.Errorf("decodeCommentBody(%s) column = %q, ok %v; want %q, %v", tt.body, got, ok, tt.wantCol, tt.ok)
@@ -159,6 +160,32 @@ func TestSetReactionValidation(t *testing.T) {
 			handleSetReaction(rec, req, db.Session{})
 			if rec.Code != tt.status {
 				t.Errorf("status = %d, want %d", rec.Code, tt.status)
+			}
+		})
+	}
+}
+
+func TestDecodeCommentBodyKind(t *testing.T) {
+	tests := []struct {
+		name, body string
+		adding     bool
+		wantKind   string
+		ok         bool
+	}{
+		{"default kind", `{"body":"hi"}`, true, "comment", true},
+		{"emphasis with text", `{"body":"too far","kind":"emphasis"}`, true, "emphasis", true},
+		{"thumbs up without text", `{"body":"","kind":"up"}`, true, "up", true},
+		{"thumbs down without text", `{"kind":"down"}`, true, "down", true},
+		{"plain comment needs text", `{"body":" ","kind":"comment"}`, true, "", false},
+		{"unknown kind", `{"body":"x","kind":"heart"}`, true, "", false},
+		{"editing needs text", `{"body":""}`, false, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			in, ok := decodeCommentBody(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tt.body)), tt.adding)
+			if ok != tt.ok || (ok && in.Kind != tt.wantKind) {
+				t.Errorf("kind = %q, ok = %v; want %q, %v", in.Kind, ok, tt.wantKind, tt.ok)
 			}
 		})
 	}
