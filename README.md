@@ -51,6 +51,7 @@ While a room is locked in, every change except unlocking returns `409`.
 | `PATCH` | `/rooms/{slug}` | admin | `{name?, maxItems? (null = no limit), voteMode?: "thumbs" \| "budget", votesPerMember?, allowDuplicateVotes?, everyoneAdmin?, locked?}` → `204`. Changing `voteMode` clears all votes; turning off duplicates caps votes per option at 1. While locked only `{locked: false}` is accepted |
 | `PATCH` | `/rooms/{slug}/members/{id}` | admin | `{isAdmin}` → `204`; `409` if it would leave no admin |
 | `DELETE` | `/rooms/{slug}/members/{id}` | admin | → `204`; revokes their token and deletes their votes and comments; `409` if it would leave no admin |
+| `POST` | `/rooms/{slug}/link-title` | ✓ | `{url}` → `{title}` (the page's `<title>`, else `og:title`), or `{title: null}` if it can't be fetched. Public `http(s)` hosts only (private/internal IPs refused after DNS and on redirects), 5 s timeout, 1 MB max |
 | `POST` | `/rooms/{slug}/passcode` | admin | → `{passcode, passcodeChangedAt}`; new passcode, shown once; members stay joined |
 | `PATCH` | `/rooms/{slug}/items/{id}` | admin | `{title?, fields?: {columnId: value \| null}}` → `204`; `""` or `null` clears a value; `409` title taken |
 | `DELETE` | `/rooms/{slug}/items/{id}` | admin | → `204`; deletes the option with its votes and comments |

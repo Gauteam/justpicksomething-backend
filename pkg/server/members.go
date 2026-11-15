@@ -16,6 +16,7 @@ func registerMemberRoutes(mux *http.ServeMux) {
 	// Removing someone deletes their votes, so not while locked.
 	mux.HandleFunc("DELETE /rooms/{slug}/members/{id}", withSession(requireAdmin(requireUnlocked(handleRemoveMember))))
 	mux.HandleFunc("POST /rooms/{slug}/passcode", withSession(requireAdmin(handleResetPasscode)))
+	mux.HandleFunc("POST /rooms/{slug}/link-title", withSession(handleLinkTitle))
 }
 
 func handleSetAdmin(w http.ResponseWriter, r *http.Request, s db.Session) {
