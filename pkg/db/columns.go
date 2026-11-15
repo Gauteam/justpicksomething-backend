@@ -34,6 +34,10 @@ type Comment struct {
 	Body      string     `json:"body"`
 	CreatedAt time.Time  `json:"createdAt"`
 	EditedAt  *time.Time `json:"editedAt"`
+	// Emphasis from members: ★ (+1) and ⚑ (-1) counts, and the viewer's own.
+	Stars      int `json:"stars"`
+	Concerns   int `json:"concerns"`
+	MyReaction int `json:"myReaction"`
 }
 
 // Columns lists a room's columns in display order.
@@ -205,23 +209,67 @@ func DeleteItem(ctx context.Context, roomID, itemID string) error {
 	})
 }
 
+// commentSelect reads comments with their reaction counts and memberID's own
+// reaction ($1 is the room, $2 the viewing member).
+const commentSelect = `
+	SELECT
+		c.id, c.item_id, c.column_id, c.member_id, c.body, c.created_at, c.edited_at,
+		COALESCE(SUM(1) FILTER (WHERE r.value = 1), 0),
+		COALESCE(SUM(1) FILTER (WHERE r.value = -1), 0),
+		COALESCE(MAX(r.value) FILTER (WHERE r.member_id = $2), 0)
+	FROM comments c
+	LEFT JOIN comment_reactions r ON r.comment_id = c.id
+	WHERE c.room_id = $1`
+
 // Comments lists an item's comments, oldest first.
-func Comments(ctx context.Context, roomID, itemID string) ([]Comment, error) {
+func Comments(ctx context.Context, roomID, itemID, memberID string) ([]Comment, error) {
+	return queryComments(ctx, commentSelect+` AND c.item_id = $3 GROUP BY c.id ORDER BY c.created_at`, roomID, memberID, itemID)
+}
+
+// RoomComments lists every comment in the room, oldest first.
+func RoomComments(ctx context.Context, roomID, memberID string) ([]Comment, error) {
+	return queryComments(ctx, commentSelect+` GROUP BY c.id ORDER BY c.created_at`, roomID, memberID)
+}
+
+func queryComments(ctx context.Context, sql string, args ...any) ([]Comment, error) {
 	p, err := Pool()
 	if err != nil {
 		return nil, err
 	}
-
-	rows, err := p.Query(ctx, `
-		SELECT id, item_id, column_id, member_id, body, created_at, edited_at
-		FROM comments
-		WHERE room_id = $1 AND item_id = $2
-		ORDER BY created_at
-	`, roomID, itemID)
+	rows, err := p.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, scanComment)
+}
+
+// SetReaction sets memberID's emphasis on a comment (+1 ★ or -1 ⚑). It
+// returns ErrNotFound if the comment isn't in the room.
+func SetReaction(ctx context.Context, roomID, commentID, memberID string, value int) error {
+	return execInRoom(ctx, roomID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO comment_reactions (comment_id, member_id, value)
+			SELECT $2, $3, $4
+			WHERE EXISTS (SELECT 1 FROM comments WHERE id = $2 AND room_id = $1)
+			ON CONFLICT (comment_id, member_id) DO UPDATE SET value = EXCLUDED.value
+		`, roomID, commentID, memberID, value)
+		if err == nil && tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return err
+	})
+}
+
+// ClearReaction removes memberID's emphasis on a comment, if any.
+func ClearReaction(ctx context.Context, roomID, commentID, memberID string) error {
+	return execInRoom(ctx, roomID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			DELETE FROM comment_reactions r
+			USING comments c
+			WHERE r.comment_id = c.id AND c.room_id = $1 AND r.comment_id = $2 AND r.member_id = $3
+		`, roomID, commentID, memberID)
+		return err
+	})
 }
 
 // AddComment adds a comment on an item, or on one of its cells when columnID
@@ -234,7 +282,7 @@ func AddComment(ctx context.Context, roomID, itemID, memberID, body string, colu
 			SELECT $1, $2, $3, $4, $5
 			WHERE EXISTS (SELECT 1 FROM items WHERE id = $2 AND room_id = $1)
 				AND ($5::uuid IS NULL OR EXISTS (SELECT 1 FROM columns WHERE id = $5 AND room_id = $1))
-			RETURNING id, item_id, column_id, member_id, body, created_at, edited_at
+			RETURNING id, item_id, column_id, member_id, body, created_at, edited_at, 0, 0, 0
 		`, roomID, itemID, memberID, body, columnID)
 		if err != nil {
 			return err
@@ -290,7 +338,10 @@ func DeleteComment(ctx context.Context, roomID, commentID string) error {
 
 func scanComment(row pgx.CollectableRow) (Comment, error) {
 	var c Comment
-	err := row.Scan(&c.ID, &c.ItemID, &c.ColumnID, &c.AuthorID, &c.Body, &c.CreatedAt, &c.EditedAt)
+	err := row.Scan(
+		&c.ID, &c.ItemID, &c.ColumnID, &c.AuthorID, &c.Body, &c.CreatedAt, &c.EditedAt,
+		&c.Stars, &c.Concerns, &c.MyReaction,
+	)
 	return c, err
 }
 

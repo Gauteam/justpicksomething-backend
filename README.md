@@ -60,8 +60,11 @@ While a room is locked in, every change except unlocking returns `409`.
 | `PATCH` | `/rooms/{slug}/columns/{id}` | admin | `{name}` → `204` |
 | `DELETE` | `/rooms/{slug}/columns/{id}` | admin | → `204`; also removes its values from every item |
 | `PUT` | `/rooms/{slug}/columns/order` | admin | `{ids: [...]}` (every column, in order) → `204` |
-| `GET` | `/rooms/{slug}/items/{id}/comments` | ✓ | → `{comments}`, oldest first |
+| `GET` | `/rooms/{slug}/items/{id}/comments` | ✓ | → `{comments}`, oldest first; each has `stars`, `concerns`, `myReaction` |
 | `POST` | `/rooms/{slug}/items/{id}/comments` | ✓ | `{body, columnId?}` → `201` comment; with `columnId` it's a comment on that cell |
+| `GET` | `/rooms/{slug}/comments` | ✓ | → `{comments}`: every comment in the room, oldest first (the comments stream) |
+| `PUT` | `/rooms/{slug}/comments/{id}/reaction` | ✓ | `{value: 1 \| -1}` (★ positive / ⚑ concern) → `204`; one per member per comment |
+| `DELETE` | `/rooms/{slug}/comments/{id}/reaction` | ✓ | → `204`; clears yours |
 | `PUT` | `/rooms/{slug}/comments/{id}` | author | `{body}` → `204`; marks it edited |
 | `DELETE` | `/rooms/{slug}/comments/{id}` | author or admin | → `204` |
 

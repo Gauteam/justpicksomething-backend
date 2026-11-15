@@ -139,3 +139,27 @@ func TestDecodeCommentBodyColumn(t *testing.T) {
 		}
 	}
 }
+
+func TestSetReactionValidation(t *testing.T) {
+	const commentID = "6f1c2c1e-4b9a-4c55-9a39-2f1b5f0c8d11"
+	tests := []struct {
+		name, id, body string
+		status         int
+	}{
+		{"zero", commentID, `{"value":0}`, http.StatusBadRequest},
+		{"two", commentID, `{"value":2}`, http.StatusBadRequest},
+		{"missing", commentID, `{}`, http.StatusBadRequest},
+		{"bad id", "nope", `{"value":1}`, http.StatusNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPut, "/", strings.NewReader(tt.body))
+			req.SetPathValue("id", tt.id)
+			rec := httptest.NewRecorder()
+			handleSetReaction(rec, req, db.Session{})
+			if rec.Code != tt.status {
+				t.Errorf("status = %d, want %d", rec.Code, tt.status)
+			}
+		})
+	}
+}

@@ -37,6 +37,9 @@ func registerM2Routes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /rooms/{slug}/items/order", withSession(requireAdmin(requireUnlocked(handleReorderItems))))
 
 	mux.HandleFunc("GET /rooms/{slug}/items/{id}/comments", withSession(handleListComments))
+	mux.HandleFunc("GET /rooms/{slug}/comments", withSession(handleRoomComments))
+	mux.HandleFunc("PUT /rooms/{slug}/comments/{id}/reaction", withSession(requireUnlocked(handleSetReaction)))
+	mux.HandleFunc("DELETE /rooms/{slug}/comments/{id}/reaction", withSession(requireUnlocked(handleClearReaction)))
 	mux.HandleFunc("POST /rooms/{slug}/items/{id}/comments", withSession(requireUnlocked(handleAddComment)))
 	mux.HandleFunc("PUT /rooms/{slug}/comments/{id}", withSession(requireUnlocked(handleEditComment)))
 	mux.HandleFunc("DELETE /rooms/{slug}/comments/{id}", withSession(requireUnlocked(handleDeleteComment)))
@@ -268,12 +271,51 @@ func handleListComments(w http.ResponseWriter, r *http.Request, s db.Session) {
 	if !ok {
 		return
 	}
-	comments, err := db.Comments(r.Context(), s.Room.ID, id)
+	comments, err := db.Comments(r.Context(), s.Room.ID, id, s.Member.ID)
 	if err != nil {
 		internalError(w, "list comments", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"comments": comments})
+}
+
+// handleRoomComments lists every comment in the room (the comments stream).
+func handleRoomComments(w http.ResponseWriter, r *http.Request, s db.Session) {
+	comments, err := db.RoomComments(r.Context(), s.Room.ID, s.Member.ID)
+	if err != nil {
+		internalError(w, "room comments", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"comments": comments})
+}
+
+// handleSetReaction marks a comment ★ ({value: 1}) or ⚑ ({value: -1}).
+func handleSetReaction(w http.ResponseWriter, r *http.Request, s db.Session) {
+	id, ok := idFromPath(w, r, "comment")
+	if !ok {
+		return
+	}
+	var body struct {
+		Value int `json:"value"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	if body.Value != 1 && body.Value != -1 {
+		writeError(w, http.StatusBadRequest, "value must be 1 or -1")
+		return
+	}
+	err := db.SetReaction(r.Context(), s.Room.ID, id, s.Member.ID, body.Value)
+	writeMutationResult(w, err, "set reaction", "comment", "")
+}
+
+func handleClearReaction(w http.ResponseWriter, r *http.Request, s db.Session) {
+	id, ok := idFromPath(w, r, "comment")
+	if !ok {
+		return
+	}
+	err := db.ClearReaction(r.Context(), s.Room.ID, id, s.Member.ID)
+	writeMutationResult(w, err, "clear reaction", "comment", "")
 }
 
 func handleAddComment(w http.ResponseWriter, r *http.Request, s db.Session) {
